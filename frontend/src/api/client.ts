@@ -1,11 +1,18 @@
-/** 统一请求封装：拼后端地址、抛网络错误、给页脚留一句可读的说明。 */
+/** 统一请求封装：拼后端地址、随登录会话携带操作人/班组、抛网络错误。 */
+import { useSessionStore } from '@/stores/session'
+
 const API_BASE = import.meta.env.VITE_API_BASE ?? ''
 
 export function request(path: string, init?: RequestInit): Promise<Response> {
   const url = path.startsWith('http') ? path : `${API_BASE}${path}`
+  const session = useSessionStore()
+  // 操作身份只从登录会话取，页面不能在请求体里冒充别人；后端按 X-Team 做责任班组鉴权。
+  const headers = new Headers(init?.headers ?? { 'Content-Type': 'application/json' })
+  headers.set('X-Operator', session.operator)
+  headers.set('X-Team', session.team)
   return fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
     ...init,
+    headers,
   }).catch((error: unknown) => {
     const detail = error instanceof Error ? error.message : '请求未送达'
     throw new Error(`接口请求失败：${detail}`)
