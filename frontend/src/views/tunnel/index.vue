@@ -3,7 +3,7 @@
     <header class="page-head">
       <div>
         <h2>隧道设施管理</h2>
-        <p class="page-desc">维护隧道设施，围绕隧道编码、隧道名称、隧道长度、断面形式做登记、筛选与状态流转。</p>
+        <p class="page-desc">维护隧道设施，围绕隧道编码、隧道名称、隧道长度、断面形式做登记、筛选与状态流转；仅责任班组可安排检修与停用。</p>
       </div>
       <div class="page-actions">
         <button class="btn primary" type="button" @click="openCreate">登记隧道设施</button>
@@ -17,6 +17,11 @@
         <strong class="stat-value">{{ item.value }}</strong>
       </article>
     </div>
+
+    <p class="page-desc">
+      当前值班：{{ store.operator }}（{{ store.team }}）；
+      非责任班组只能查看，越权提交会被后端阻断并提示具体原因。
+    </p>
 
     <form class="filter-bar" @submit.prevent="reload">
       <label v-for="field in filterFields" :key="field" class="filter-item">
@@ -36,17 +41,25 @@
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
-          <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
+          <td v-for="column in columns" :key="column">
+            <RouterLink v-if="column === '隧道名称'" class="tunnel-name" :to="`/tunnel/${row.id}`">
+              {{ row[column] ?? '—' }}
+            </RouterLink>
+            <template v-else>{{ row[column] ?? '—' }}</template>
+          </td>
           <td class="row-actions">
-            <button
-              v-for="action in actions"
-              :key="action"
-              class="link"
-              type="button"
-              @click="runAction(action, row)"
-            >
-              {{ action }}
-            </button>
+            <template v-for="action in actions" :key="action">
+              <button
+                class="link"
+                :class="{ muted: !actionState(action, row, store.team, store.isCrew).enabled }"
+                type="button"
+                :title="actionState(action, row, store.team, store.isCrew).reason"
+                @click="runAction(action, row)"
+              >
+                {{ action }}
+              </button>
+            </template>
+            <RouterLink class="link detail-link" :to="`/tunnel/${row.id}`">详情</RouterLink>
           </td>
         </tr>
         <tr v-if="!rows.length">
@@ -66,16 +79,20 @@
 import { onMounted, ref } from 'vue'
 
 import { request } from '@/api/client'
+import { useSessionStore } from '@/stores/session'
+import {
+  actions,
+  actionState,
+  columns,
+  ENDPOINT,
+  stats,
+  submitAction,
+  type TunnelRow,
+} from './shared'
 
-type Row = Record<string, string | number | null>
+const store = useSessionStore()
 
-const ENDPOINT = '/api/tunnel'
-const columns = ["隧道编码", "隧道名称", "隧道长度", "断面形式", "照明方式", "通风方式", "管养单位", "隧道状态"]
-const actions = ["办理移交", "安排检修", "停用隧道"]
-const statuses = ["待移交", "正常养护", "检修封闭", "已停用"]
-const stats = [{"label": "在养隧道", "value": 0}, {"label": "检修中隧道", "value": 0}, {"label": "隧道总长", "value": 0}]
-
-const rows = ref<Row[]>([])
+const rows = ref<TunnelRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
@@ -94,16 +111,15 @@ function openCreate() {
   errorMessage.value = '隧道设施登记入口尚未接入审批流'
 }
 
-async function runAction(action: string, row: Row) {
+async function runAction(action: string, row: TunnelRow) {
+  const state = actionState(action, row, store.team, store.isCrew)
+  if (!state.enabled) {
+    errorMessage.value = state.reason
+    return
+  }
   errorMessage.value = ''
   try {
-    const response = await request(`${ENDPOINT}/${row.id}/actions`, {
-      method: 'POST',
-      body: JSON.stringify({ action }),
-    })
-    if (!response.ok) {
-      throw new Error('隧道设施动作未生效，请稍后重试')
-    }
+    await submitAction(action, row)
     await reload()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '隧道设施操作失败'
@@ -128,3 +144,9 @@ async function reload() {
 
 onMounted(reload)
 </script>
+
+<style scoped>
+.tunnel-name { color: var(--brand); text-decoration: none; }
+.tunnel-name:hover { text-decoration: underline; }
+.detail-link { margin-left: 4px; }
+</style>

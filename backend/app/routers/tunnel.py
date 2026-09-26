@@ -3,16 +3,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.identity import Operator, current_operator
 from app.schemas import ActionResult, EntryPayload, PageResult
-from app.services.tunnel import TunnelService
+from app.services.tunnel import ConflictError, PermissionError, TunnelService
 
 router = APIRouter(prefix="/api/tunnel", tags=["隧道设施"])
 
 service = TunnelService()
 
-LIST_FIELDS = ["隧道编码", "隧道名称", "隧道长度", "断面形式", "照明方式", "通风方式", "管养单位", "隧道状态"]
+LIST_FIELDS = ["隧道编码", "隧道名称", "隧道长度", "断面形式", "照明方式", "通风方式", "管养单位", "责任班组", "隧道状态"]
 STATUSES = ["待移交", "正常养护", "检修封闭", "已停用"]
 
 
@@ -49,10 +50,23 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
-def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条隧道设施执行办理移交、安排检修、停用隧道；不允许的动作会被拦下并说明原因。"""
+def run_action(
+    entry_id: int,
+    payload: EntryPayload,
+    operator: Operator = Depends(current_operator),
+) -> ActionResult:
+    """对单条隧道设施执行办理移交、安排检修、停用隧道。
+
+    只有责任班组能操作本隧道，越权提交返回 403 并说明哪里不被允许；
+    已停用隧道再提交动作返回 409，停用终态不可逆。
+    """
     action = str(payload.values.get("action") or "").strip()
-    entry, message = service.run_action(entry_id, action)
+    try:
+        entry, message = service.run_action(entry_id, action, operator)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
